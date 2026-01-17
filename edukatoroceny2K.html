@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+<meta charset="UTF-8">
+<title>Dziennik Elektroniczny – Edytowalne Oceny</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<style>
+body{font-family:Arial,sans-serif;margin:0;background:#f4f6f8}
+header{background:#1e88e5;color:#fff;padding:12px;text-align:center}
+main{padding:16px}
+.card{background:#fff;padding:16px;margin-bottom:16px;border-radius:8px;box-shadow:0 2px 6px rgba(0,0,0,.1)}
+input,select,button{width:100%;padding:8px;margin-top:6px}
+button{background:#1e88e5;color:#fff;border:none;border-radius:6px;cursor:pointer}
+button:hover{background:#1565c0}
+.hidden{display:none}
+.grade-btn{display:inline-block;padding:6px 10px;margin:4px;border:1px solid #1e88e5;border-radius:6px;cursor:pointer}
+.grade-btn.active{background:#1e88e5;color:#fff}
+table{width:100%;border-collapse:collapse;margin-top:10px}
+th,td{border:1px solid #ccc;padding:8px;text-align:center}
+th{background:#e3f2fd}
+input[type=color]{padding:0;height:32px}
+</style>
+</head>
+<body>
+<header>
+<h1>Dziennik Elektroniczny</h1>
+<p>Edytowalne oceny – wersja pełna</p>
+</header>
+<main>
+
+<div class="card" id="auth">
+<h2>Rejestracja</h2>
+<select id="regRole"><option value="student">Uczeń</option><option value="teacher">Nauczyciel</option></select>
+<input id="regName" placeholder="Login">
+<input id="regPass" type="password" placeholder="Hasło">
+<button onclick="register()">Utwórz konto</button>
+<hr>
+<h2>Logowanie</h2>
+<input id="loginName" placeholder="Login">
+<input id="loginPass" type="password" placeholder="Hasło">
+<button onclick="login()">Zaloguj</button>
+</div>
+
+<div class="card hidden" id="dashboard">
+<h2 id="welcome"></h2>
+<button onclick="logout()">Wyloguj</button>
+
+<div id="studentPanel" class="hidden">
+<h3>Panel ucznia</h3>
+<p>ID: <span id="sid"></span></p>
+<p>Klasa: <span id="sclass"></span></p>
+<div id="gradesView"></div>
+</div>
+
+<div id="teacherPanel" class="hidden">
+<h3>Panel nauczyciela</h3>
+
+<h4>Tworzenie klasy</h4>
+<input id="className" placeholder="Nazwa nowej klasy">
+<button onclick="createClass()">Dodaj klasę</button>
+
+<h4>Dodaj ucznia do klasy</h4>
+<select id="classSelect" onchange="loadClassStudents()"></select>
+<select id="allStudentsSelect"></select>
+<button onclick="addStudentToClass()">Dodaj ucznia do klasy</button>
+
+<h4>Dodawanie przedmiotów uczniom</h4>
+<select id="studentSelect" onchange="loadSubjects()"></select>
+<input id="subjectInput" placeholder="Nazwa przedmiotu">
+<button onclick="addSubject()">Dodaj przedmiot</button>
+
+<h4>Dodawanie ocen</h4>
+<select id="subjectSelect"></select>
+<div id="gradeBtns"></div>
+<input id="gradeCategory" placeholder="Kategoria (np. kartkówka)">
+<input id="gradeColor" type="color" value="#1e88e5">
+<select id="weight"><option>1</option><option>2</option><option>3</option><option>4</option><option>5</option><option>6</option></select>
+<select id="semester"><option value="1">Semestr 1</option><option value="2">Semestr 2</option></select>
+<input id="gradeDesc" placeholder="Opis oceny">
+<button onclick="addGrade()">Zapisz ocenę</button>
+
+<h4>Oceny ucznia</h4>
+<div id="teacherGradesView"></div>
+
+</div>
+</main>
+
+<script>
+const $ = id=>document.getElementById(id);
+const load = k=>JSON.parse(localStorage.getItem(k)||'[]');
+const save = (k,v)=>localStorage.setItem(k,JSON.stringify(v));
+let selectedGrade = null;
+
+// --- Rejestracja / Logowanie ---
+function register(){
+ let users = load('users');
+ if(users.find(u=>u.name===$('regName').value)) return alert('Login zajęty!');
+ users.push({
+  id:'U'+Math.random().toString(36).slice(2,8),
+  name:$('regName').value,
+  pass:$('regPass').value,
+  role:$('regRole').value,
+  class:null,
+  subjects:{}
+ });
+ save('users', users);
+ alert('Konto utworzone!');
+ refreshAllStudents();
+}
+function login(){
+ let u = load('users').find(u=>u.name===$('loginName').value && u.pass===$('loginPass').value);
+ if(!u) return alert('Błędne dane');
+ localStorage.setItem('currentUser',JSON.stringify(u));
+ render();
+}
+function logout(){localStorage.removeItem('currentUser'); location.reload();}
+
+// --- Dashboard ---
+function render(){
+ let u = JSON.parse(localStorage.getItem('currentUser')); if(!u) return;
+ $('auth').classList.add('hidden'); $('dashboard').classList.remove('hidden');
+ $('welcome').innerText='Witaj '+u.name;
+ if(u.role==='student'){ $('studentPanel').classList.remove('hidden'); updateStudentPanel();}
+ else{ $('teacherPanel').classList.remove('hidden'); refreshClasses(); refreshAllStudents(); renderTeacherGrades();}
+}
+
+// --- Student Panel ---
+function updateStudentPanel(){
+ let current = JSON.parse(localStorage.getItem('currentUser'));
+ if(!current || current.role!=='student') return;
+ let users = load('users'); let u = users.find(x=>x.id===current.id);
+ if(!u) return;
+ localStorage.setItem('currentUser',JSON.stringify(u));
+ $('sid').innerText = u.id;
+ $('sclass').innerText = u.class||'-';
+ renderStudent(u);
+}
+
+// --- Klasy ---
+function createClass(){
+ let c = load('classes'); 
+ if(c.find(x=>x.name===$('className').value)) return alert('Klasa istnieje');
+ c.push({name:$('className').value, students:[]}); save('classes',c); refreshClasses();
+}
+function refreshClasses(){
+ $('classSelect').innerHTML='';
+ load('classes').forEach(c=>{
+  let o=document.createElement('option'); o.value=c.name; o.textContent=c.name; $('classSelect').appendChild(o);
+ });
+ loadClassStudents();
+}
+
+// --- Uczniowie ---
+function refreshAllStudents(){
+ const allStudents = load('users').filter(u=>u.role==='student');
+ $('allStudentsSelect').innerHTML='';
+ allStudents.forEach(s=>{
+    let o=document.createElement('option'); o.value=s.id; o.textContent=s.name + (s.class?' ('+s.class+')':'');
+    $('allStudentsSelect').appendChild(o);
+ });
+}
+function addStudentToClass(){
+ const className = $('classSelect').value;
+ if(!className) return alert('Wybierz klasę!');
+ const studentId = $('allStudentsSelect').value;
+ if(!studentId) return alert('Wybierz ucznia!');
+ const classes = load('classes');
+ const cls = classes.find(c=>c.name===className);
+ const users = load('users');
+ const student = users.find(u=>u.id===studentId);
+ if(!cls.students.includes(studentId)) cls.students.push(studentId);
+ student.class = className;
+ save('users',users); save('classes',classes);
+ loadClassStudents(); refreshAllStudents(); updateStudentPanel(); renderTeacherGrades();
+ alert('Uczeń dodany do klasy!');
+}
+function loadClassStudents(){
+ $('studentSelect').innerHTML='';
+ let cls = load('classes').find(c=>c.name===$('classSelect').value);
+ if(!cls) return;
+ let users = load('users');
+ users.filter(u=>cls.students.includes(u.id)).forEach(u=>{
+  let o=document.createElement('option'); o.value=u.id; o.textContent=u.name;
+  $('studentSelect').appendChild(o);
+ });
+ loadSubjects(); renderTeacherGrades();
+}
+
+// --- Przedmioty ---
+function addSubject(){
+ let users = load('users'); let studentId = $('studentSelect').value;
+ if(!studentId) return alert('Wybierz ucznia');
+ let u = users.find(x=>x.id===studentId);
+ let subj = $('subjectInput').value; if(!subj) return alert('Wpisz nazwę przedmiotu');
+ if(!u.subjects[subj]) u.subjects[subj]={grades:[]};
+ save('users',users); loadSubjects(); alert('Dodano przedmiot');
+}
+function loadSubjects(){
+ let studentId = $('studentSelect').value;
+ if(!studentId) return;
+ let u = load('users').find(x=>x.id===studentId);
+ $('subjectSelect').innerHTML='';
+ Object.keys(u.subjects).forEach(s=>{
+  let o = document.createElement('option'); o.value=s; o.textContent=s;
+  $('subjectSelect').appendChild(o);
+ });
+ updateStudentPanel(); renderTeacherGrades();
+}
+
+// --- Oceny ---
+const base=[0,1,2,3,4,5,6],mods=['','+','-'];
+base.forEach(b=>mods.forEach(m=>{
+ if((b===6&&m==='+')||(b===1&&m==='-')||(b===0&&m)) return;
+ let btn=document.createElement('span'); btn.className='grade-btn'; btn.textContent=b+m;
+ btn.onclick=()=>{document.querySelectorAll('.grade-btn').forEach(x=>x.classList.remove('active')); btn.classList.add('active'); selectedGrade=b+m;}
+ $('gradeBtns').appendChild(btn);
+}));
+function val(g){let v=parseInt(g); if(g.includes('+')) v+=0.25; if(g.includes('-')) v-=0.25; return v;}
+
+// --- Dodawanie ocen ---
+function addGrade(){
+ let studentId = $('studentSelect').value;
+ let subject = $('subjectSelect').value;
+ if(!studentId || !subject) return alert('Wybierz ucznia i przedmiot!');
+ if(!selectedGrade) return alert('Wybierz ocenę');
+ let users = load('users'); let u = users.find(x=>x.id===studentId);
+ u.subjects[subject].grades.push({
+  g:selectedGrade,
+  w:+$('weight').value,
+  s:+$('semester').value,
+  cat:$('gradeCategory').value,
+  color:$('gradeColor').value,
+  desc:$('gradeDesc').value
+ });
+ save('users',users); loadSubjects(); alert('Ocena dodana!');
+}
+
+// --- Średnia ważona ---
+function avg(sub,sem){
+ let f=sub.grades.filter(x=>x.s===sem); let sw=0,sv=0;
+ f.forEach(x=>{sv+=val(x.g)*x.w; sw+=x.w;});
+ return sw?(sv/sw).toFixed(2):'-';
+}
+function avgYear(sub){
+ let s1 = parseFloat(avg(sub,1)); let s2 = parseFloat(avg(sub,2));
+ if(isNaN(s1)) s1=0; if(isNaN(s2)) s2=0;
+ return ((s1+s2)/2).toFixed(2);
+}
+
+// --- Render ucznia ---
+function renderStudent(u){
+ $('gradesView').innerHTML='';
+ Object.entries(u.subjects).forEach(([n,s])=>{
+  let d=document.createElement('div'); d.className='card';
+  let table='<table><tr><th>Ocena</th><th>Kategoria</th><th>Waga</th><th>Semestr</th><th>Opis</th></tr>';
+  s.grades.forEach(g=>{
+   table+=`<tr style="background:${g.color}"><td>${g.g}</td><td>${g.cat||'-'}</td><td>${g.w}</td><td>${g.s}</td><td>${g.desc||'-'}</td></tr>`;
+  });
+  table+='</table>';
+  d.innerHTML=`<h4>${n}</h4>Śr. S1: ${avg(s,1)} | Śr. S2: ${avg(s,2)} | Śr. Roczna: ${avgYear(s)} ${table}`;
+  $('gradesView').appendChild(d);
+ });
+}
+
+// --- Panel nauczyciela z edycją i usuwaniem ---
+function renderTeacherGrades(){
+ $('teacherGradesView').innerHTML='';
+ let studentId = $('studentSelect').value;
+ if(!studentId) return;
+ let u = load('users').find(x=>x.id===studentId);
+ if(!u) return;
+ Object.entries(u.subjects).forEach(([n,s])=>{
+  let d=document.createElement('div'); d.className='card';
+  let table='<table><tr><th>Ocena</th><th>Kategoria</th><th>Waga</th><th>Semestr</th><th>Opis</th><th>Kolor</th><th>Akcje</th></tr>';
+  s.grades.forEach((g,i)=>{
+   table+=`<tr style="background:${g.color}"><td contenteditable="true" oninput="editGrade('${studentId}','${n}',${i},'g',this.innerText)">${g.g}</td>
+   <td contenteditable="true" oninput="editGrade('${studentId}','${n}',${i},'cat',this.innerText)">${g.cat||'-'}</td>
+   <td contenteditable="true" oninput="editGrade('${studentId}','${n}',${i},'w',this.innerText)">${g.w}</td>
+   <td contenteditable="true" oninput="editGrade('${studentId}','${n}',${i},'s',this.innerText)">${g.s}</td>
+   <td contenteditable="true" oninput="editGrade('${studentId}','${n}',${i},'desc',this.innerText)">${g.desc||'-'}</td>
+   <td><input type="color" value="${g.color}" onchange="editGrade('${studentId}','${n}',${i},'color',this.value)"></td>
+   <td><button onclick="deleteGrade('${studentId}','${n}',${i})">Usuń</button></td>
+   </tr>`;
+  });
+  table+='</table>';
+  d.innerHTML=`<h4>${n}</h4>Śr. S1: ${avg(s,1)} | Śr. S2: ${avg(s,2)} | Śr. Roczna: ${avgYear(s)} ${table}`;
+  $('teacherGradesView').appendChild(d);
+ });
+}
+
+// --- Edytowanie / usuwanie ---
+function editGrade(studentId,subject,index,field,value){
+ let users = load('users');
+ let u = users.find(x=>x.id===studentId);
+ if(!u) return;
+ let g = u.subjects[subject].grades[index];
+ if(field==='w'||field==='s') g[field]=parseFloat(value)||1;
+ else g[field]=value;
+ save('users',users); updateStudentPanel(); renderTeacherGrades();
+}
+function deleteGrade(studentId,subject,index){
+ let users = load('users');
+ let u = users.find(x=>x.id===studentId);
+ if(!u) return;
+ u.subjects[subject].grades.splice(index,1);
+ save('users',users); updateStudentPanel(); renderTeacherGrades();
+}
+
+render();
+</script>
+</body>
+</html>
